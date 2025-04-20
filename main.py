@@ -4,21 +4,19 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from plotly import graph_objs as go
-import tensorflow
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM, Dropout
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 
-# Constants
-START = "2020-01-01"
+# Set date range
+START = "2015-01-01"
 TODAY = date.today().strftime("%Y-%m-%d")
-stocks = ('GOOG', 'AAPL', 'MSFT', 'JPM', "TSLA", "AMZN", "META", "NVDA")
 
-# App title
 st.title('Stock Forecast App')
 
-# Initialize session state
+# Create session state for tracking previous selections
 if 'prev_stock' not in st.session_state:
     st.session_state.update({
         'prev_stock': None,
@@ -32,7 +30,7 @@ if 'prev_stock' not in st.session_state:
         'history': None
     })
 
-# User inputs
+stocks = ('GOOG', 'AAPL', 'MSFT', 'JPM', "TSLA", "AMZN", "META", "NVDA")
 selected_stock = st.selectbox('Select dataset for prediction', stocks)
 n_years = st.slider('Years of prediction:', 1, 4)
 period = n_years * 365
@@ -45,275 +43,348 @@ if st.session_state.prev_stock is not None and (st.session_state.prev_stock != s
 # Update previous selections
 st.session_state.prev_stock, st.session_state.prev_years = selected_stock, n_years
 
-# Data loading
+# LSTM is the default model
+st.write("Using LSTM model for prediction")
+
+
 @st.cache_data
 def load_data(ticker):
     data = yf.download(ticker, START, TODAY)
-    if data.empty:
-        st.error(f"No data found for {ticker}. Try another stock or date range.")
-        return pd.DataFrame()
-    return data.reset_index()
+    data.reset_index(inplace=True)
+    return data
 
+
+data_load_state = st.text('Loading data...')
 data = load_data(selected_stock)
+data_load_state.text('Loading data... done!')
 
-# Display raw data
 st.subheader('Raw data')
 st.write(data.tail())
 
+
 # Plot raw data
 def plot_raw_data():
-    if data.empty:
-        return st.error("No data available to display.")
+    # Check if data is available
+    if data is not None and not data.empty and len(data) > 0:
+        # Create two tabs for different visualizations
+        price_tab, volume_tab = st.tabs(["Price History", "Trading Volume"])
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], name='Close Price', line=dict(color='#2E86C1')))
+        with price_tab:
+            st.subheader("Price History")
 
-    for window, color in [(50, '#F39C12'), (200, '#E74C3C')]:
-        if len(data) >= window:
+            # Create a figure with subplots: main chart and volume
+            fig = go.Figure()
+
+            # Add price lines
             fig.add_trace(go.Scatter(
                 x=data['Date'],
-                y=data['Close'].rolling(window).mean(),
-                name=f'{window}-day MA',
-                line=dict(color=color, width=1)
+                y=data['Close'],
+                mode='lines',
+                name='Close Price',
+                line=dict(color='#2E86C1', width=2)
             ))
 
-    fig.update_layout(
-        title=f'{selected_stock} Historical Price Data',
-        xaxis_title='Date',
-        yaxis_title='Price (USD)',
-        template='plotly_white',
-        height=500
-    )
-    st.plotly_chart(fig, use_container_width=True)
+            # Add moving averages
+            ma50 = data['Close'].rolling(window=50).mean()
+            ma200 = data['Close'].rolling(window=200).mean()
+
+            fig.add_trace(go.Scatter(
+                x=data['Date'],
+                y=ma50,
+                mode='lines',
+                name='50-day MA',
+                line=dict(color='#F39C12', width=1.5)
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=data['Date'],
+                y=ma200,
+                mode='lines',
+                name='200-day MA',
+                line=dict(color='#E74C3C', width=1.5)
+            ))
+
+            # Improve the layout
+            fig.update_layout(
+                xaxis_title='Date',
+                yaxis_title='Price (USD)',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                template='plotly_white',
+                height=500,
+                margin=dict(l=0, r=0, t=0, b=0)
+            )
+
+            # Add range selector
+            fig.update_xaxes(
+                rangeslider_visible=False,
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(step="all", label="YTD", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                )
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Add candlestick chart as an alternative view
+            st.subheader("Candlestick Chart")
+            candle_fig = go.Figure()
+
+            # Add candlestick chart
+            candle_fig.add_trace(go.Candlestick(
+                x=data['Date'],
+                open=data['Open'],
+                high=data['High'],
+                low=data['Low'],
+                close=data['Close'],
+                name='OHLC',
+                increasing_line_color='#26A69A',
+                decreasing_line_color='#EF5350'
+            ))
+
+            # Improve the layout
+            candle_fig.update_layout(
+                xaxis_title='Date',
+                yaxis_title='Price (USD)',
+                template='plotly_white',
+                height=500,
+                margin=dict(l=0, r=0, t=0, b=0)
+            )
+
+            # Add range selector
+            candle_fig.update_xaxes(
+                rangeslider_visible=False,
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(step="all", label="YTD", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                )
+            )
+
+            st.plotly_chart(candle_fig, use_container_width=True)
+
+        with volume_tab:
+            st.subheader("Trading Volume")
+
+            # Calculate daily price change for coloring volume bars
+            data['Daily_Change'] = data['Close'].diff()
+
+            # Create a figure for volume
+            volume_fig = go.Figure()
+
+            # Add colored volume bars based on price movement
+            colors = ['#EF5350' if val <= 0 else '#26A69A' for val in data['Daily_Change']]
+
+            volume_fig.add_trace(go.Bar(
+                x=data['Date'],
+                y=data['Volume'],
+                name='Volume',
+                marker=dict(
+                    color=colors,
+                    line=dict(color='rgba(58, 71, 80, 0.2)', width=0.5)
+                )
+            ))
+
+            # Add a moving average of volume
+            vol_ma = data['Volume'].rolling(window=20).mean()
+
+            volume_fig.add_trace(go.Scatter(
+                x=data['Date'],
+                y=vol_ma,
+                name='20-day MA Volume',
+                line=dict(color='#F39C12', width=2)
+            ))
+
+            # Improve the layout
+            volume_fig.update_layout(
+                xaxis_title='Date',
+                yaxis_title='Volume',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                template='plotly_white',
+                height=500,
+                margin=dict(l=0, r=0, t=0, b=0)
+            )
+
+            # Add range selector
+            volume_fig.update_xaxes(
+                rangeslider_visible=False,
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(step="all", label="YTD", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                )
+            )
+
+            st.plotly_chart(volume_fig, use_container_width=True)
+
+            # Add a table with summary statistics
+            st.subheader("Volume Statistics")
+
+            # Calculate volume statistics
+            try:
+                vol_stats = {
+                    'Average Daily Volume': f"{int(data['Volume'].mean()):,}",
+                    'Maximum Volume': f"{int(data['Volume'].max()):,}",
+                    'Minimum Volume': f"{int(data['Volume'].min()):,}",
+                    'Total Volume': f"{int(data['Volume'].sum()):,}"
+                }
+            except Exception as e:
+                st.error(f"Error calculating volume statistics: {e}")
+                vol_stats = {
+                    'Average Daily Volume': 'N/A',
+                    'Maximum Volume': 'N/A',
+                    'Minimum Volume': 'N/A',
+                    'Total Volume': 'N/A'
+                }
+
+            # Create a dataframe for display
+            vol_stats_df = pd.DataFrame(list(vol_stats.items()), columns=['Metric', 'Value'])
+            st.table(vol_stats_df)
+    else:
+        st.error("No data available to display. Please check your stock selection.")
+
 
 plot_raw_data()
 
-# LSTM Model
+# Function for LSTM prediction
 def predict_with_lstm(data, n_years):
-    if data.empty:
-        # Create empty DataFrames with proper structure
-        empty_df1 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        empty_df2 = pd.DataFrame(columns=['Date', 'Predicted_Close', 'Actual_Close'])
-        empty_df3 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        # Create a dummy history object
-        dummy_history = type('obj', (object,), {'history': {'loss': [], 'val_loss': []}})
-        # Return the properly structured objects
-        return empty_df1, empty_df2, empty_df3, 0, 0, dummy_history
+    # Prepare data
+    df = data.copy()
+    df = df[['Date', 'Close']]
+    df.set_index('Date', inplace=True)
 
-    # Keep a copy of the original data with dates
-    data_with_dates = data.copy()
-    
-    # Create a dataframe with Close prices only
-    df = data[['Close']].copy()
-    
+    # Scale data
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(df)
 
-    sequence_length = 60
-    if len(scaled_data) <= sequence_length:
-        st.error(f"Need more than {sequence_length} data points.")
-        # Create empty DataFrames with proper structure
-        empty_df1 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        empty_df2 = pd.DataFrame(columns=['Date', 'Predicted_Close', 'Actual_Close'])
-        empty_df3 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        # Create a dummy history object
-        dummy_history = type('obj', (object,), {'history': {'loss': [], 'val_loss': []}})
-        # Return the properly structured objects
-        return empty_df1, empty_df2, empty_df3, 0, 0, dummy_history
-
-    # Prepare data
+    # Create training dataset
     train_size = int(len(scaled_data) * 0.8)
-    train_data, val_data = scaled_data[:train_size], scaled_data[train_size - sequence_length:]
+    train_data = scaled_data[:train_size]
 
-    def create_sequences(data):
-        x, y = [], []
-        for i in range(sequence_length, len(data)):
-            x.append(data[i-sequence_length:i, 0])
-            y.append(data[i, 0])
-        return np.array(x), np.array(y)
+    # Create sequences
+    sequence_length = 60
+    x_train, y_train = [], []
 
-    x_train, y_train = create_sequences(train_data)
-    x_val, y_val = create_sequences(val_data)
+    for i in range(sequence_length, len(train_data)):
+        x_train.append(train_data[i-sequence_length:i, 0])
+        y_train.append(train_data[i, 0])
 
-    if len(x_train) == 0:
-        # Create empty DataFrames with proper structure
-        empty_df1 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        empty_df2 = pd.DataFrame(columns=['Date', 'Predicted_Close', 'Actual_Close'])
-        empty_df3 = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-        # Create a dummy history object
-        dummy_history = type('obj', (object,), {'history': {'loss': [], 'val_loss': []}})
-        # Return the properly structured objects
-        return empty_df1, empty_df2, empty_df3, 0, 0, dummy_history
-
-    # Reshape data
-    x_train = x_train.reshape((x_train.shape[0], x_train.shape[1], 1))
-    x_val = x_val.reshape((x_val.shape[0], x_val.shape[1], 1)) if len(x_val) > 0 else x_train[-int(len(x_train)*0.1):]
-    y_val = y_val if len(y_val) > 0 else y_train[-int(len(y_train)*0.1):]
+    x_train, y_train = np.array(x_train), np.array(y_train)
+    x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
 
     # Build model
-    model = Sequential([
-        LSTM(100, return_sequences=True, input_shape=(sequence_length, 1)),
-        Dropout(0.2),
-        LSTM(100, return_sequences=True),
-        Dropout(0.2),
-        LSTM(100),
-        Dropout(0.2),
-        Dense(1)
-    ])
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+
     model.compile(optimizer='adam', loss='mean_squared_error')
 
-    # Train model
+    # Train model with progress bar
     epochs = 50
     progress_bar = st.progress(0)
 
-    # Progress callback for training
-    class ProgressCallback(tensorflow.keras.callbacks.Callback):
-        def on_epoch_end(self, epoch, logs=None):
-            # logs parameter is required by Keras but not used here
-            progress_bar.progress((epoch + 1) / epochs)
+    class ProgressCallback(tf.keras.callbacks.Callback):
+        def __init__(self, total_epochs, progress_bar):
+            self.total_epochs = total_epochs
+            self.progress_bar = progress_bar
 
-    history = model.fit(
-        x_train, y_train,
-        epochs=epochs,
-        batch_size=32,
-        validation_data=(x_val, y_val),
-        callbacks=[ProgressCallback()],
-        verbose=0
-    )
+        def on_epoch_end(self, epoch, logs=None):
+            # Update progress bar
+            # logs parameter is required by Keras but not used here
+            self.progress_bar.progress((epoch + 1) / self.total_epochs)
+
+    callback = ProgressCallback(epochs, progress_bar)
+
+    history = model.fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0, callbacks=[callback])
     progress_bar.progress(1.0)
 
+    # Prepare test data
+    test_data = scaled_data[train_size - sequence_length:]
+    x_test, y_test = [], []
+
+    for i in range(sequence_length, len(test_data)):
+        x_test.append(test_data[i-sequence_length:i, 0])
+        y_test.append(test_data[i, 0])
+
+    x_test, y_test = np.array(x_test), np.array(y_test)
+    x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+
     # Make predictions
-    try:
-        # Transform input data
-        inputs = scaled_data.copy()
+    predictions = model.predict(x_test)
+    predictions = scaler.inverse_transform(predictions)
 
-        # Create test sequences
-        x_test = []
-        for i in range(sequence_length, len(inputs)):
-            x_test.append(inputs[i-sequence_length:i, 0])
+    # Calculate RMSE
+    y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+    rmse = np.sqrt(mean_squared_error(y_test_actual, predictions))
 
-        # Convert to numpy array and reshape
-        x_test = np.array(x_test)
-        x_test = x_test.reshape((x_test.shape[0], x_test.shape[1], 1))
+    # Calculate MAPE
+    mape = np.mean(np.abs((y_test_actual - predictions) / y_test_actual)) * 100
 
-        # Make predictions
-        raw_predictions = model.predict(x_test)
+    # Predict future values
+    last_sequence = scaled_data[-sequence_length:]
+    future_predictions = []
 
-        # Inverse transform to get actual prices
-        predicted_prices = np.zeros((len(raw_predictions), 1))
-        predicted_prices[:, 0] = raw_predictions.flatten()
-        predicted_prices = scaler.inverse_transform(predicted_prices)
+    current_batch = last_sequence.reshape((1, sequence_length, 1))
 
-        # Get actual prices for comparison
-        actual_prices = df['Close'].values[sequence_length:sequence_length+len(predicted_prices)]
+    for i in range(n_years * 365):
+        current_pred = model.predict(current_batch)[0]
+        future_predictions.append(current_pred[0])
 
-    except Exception as e:
-        st.error(f"Error making predictions: {e}")
-        # Create empty arrays
-        predicted_prices = np.array([]).reshape(-1, 1)
-        actual_prices = np.array([])
+        # Update sequence
+        current_batch = np.append(current_batch[:, 1:, :],
+                                 [[current_pred]],
+                                 axis=1)
 
-    # Calculate metrics
-    try:
-        # Check if we have enough data for metrics
-        if len(actual_prices) > 0 and len(predicted_prices) > 0:
-            # Ensure dimensions match
-            pred_flat = predicted_prices.flatten()
-            if len(pred_flat) > len(actual_prices):
-                pred_flat = pred_flat[:len(actual_prices)]
-            elif len(actual_prices) > len(pred_flat):
-                actual_prices = actual_prices[:len(pred_flat)]
-
-            # Calculate RMSE
-            rmse = np.sqrt(mean_squared_error(actual_prices, pred_flat))
-
-            # Calculate MAPE with handling for division by zero
-            with np.errstate(divide='ignore', invalid='ignore'):
-                mape = np.nanmean(np.abs((actual_prices - pred_flat) / actual_prices)) * 100
-                # Replace NaN or inf values
-                if np.isnan(mape) or np.isinf(mape):
-                    mape = 0.0
-        else:
-            rmse, mape = 0.0, 0.0
-    except Exception as e:
-        st.error(f"Error calculating metrics: {e}")
-        rmse, mape = 0.0, 0.0
-
-    # Future predictions
-    try:
-        # Get the last sequence for future predictions
-        last_sequence = scaled_data[-sequence_length:].copy()
-        future_preds = []
-
-        # Reshape for model input
-        current_batch = last_sequence.reshape(1, sequence_length, 1)
-
-        # Generate future predictions
-        for _ in range(n_years * 365):
-            # Predict next value
-            pred_result = model.predict(current_batch, verbose=0)
-            
-            # Extract the prediction value
-            pred = pred_result[0][0]
-            
-            future_preds.append(pred)
-
-            # Update the sequence with the new prediction
-            current_batch = np.append(current_batch[:,1:,:], [[[pred]]], axis=1)
-
-        # Convert predictions to actual prices
-        future_preds_array = np.array(future_preds).reshape(-1, 1)
-        future_preds = scaler.inverse_transform(future_preds_array)
-
-        # Generate future dates
-        last_date = data_with_dates['Date'].iloc[-1]
-        future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=n_years * 365)
-
-    except Exception as e:
-        st.error(f"Error generating future predictions: {e}")
-        # Create empty arrays and dates
-        future_preds = np.array([]).reshape(-1, 1)
-        future_dates = pd.date_range(start=data_with_dates['Date'].iloc[-1] + pd.Timedelta(days=1), periods=1)
+    future_predictions = np.array(future_predictions).reshape(-1, 1)
+    future_predictions = scaler.inverse_transform(future_predictions)
 
     # Create DataFrames
-    try:
-        if len(predicted_prices) > 0:
-            # Get dates for historical predictions
-            historical_dates = data_with_dates['Date'].iloc[sequence_length:sequence_length+len(predicted_prices)]
-            
-            # Create historical predictions DataFrame
-            historical_df = pd.DataFrame({
-                'Date': historical_dates,
-                'Predicted_Close': predicted_prices.flatten(),
-                'Actual_Close': actual_prices
-            })
-        else:
-            # Create an empty DataFrame with the correct structure
-            historical_df = pd.DataFrame(columns=['Date', 'Predicted_Close', 'Actual_Close'])
-    except Exception as e:
-        st.error(f"Error creating historical DataFrame: {e}")
-        # Create an empty DataFrame with the correct structure
-        historical_df = pd.DataFrame(columns=['Date', 'Predicted_Close', 'Actual_Close'])
+    last_date = df.index[-1]
+    prediction_dates = pd.date_range(start=last_date, periods=len(predictions))
+    future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=n_years * 365)
 
-    # Create future predictions DataFrame
-    try:
-        if len(future_preds) > 0:
-            # Create future predictions DataFrame
-            future_df = pd.DataFrame({
-                'Date': future_dates,
-                'Predicted_Close': future_preds.flatten()
-            })
-        else:
-            # Create an empty DataFrame with the correct structure
-            future_df = pd.DataFrame(columns=['Date', 'Predicted_Close'])
-    except Exception as e:
-        st.error(f"Error creating future predictions DataFrame: {e}")
-        # Create an empty DataFrame with the correct structure
-        future_df = pd.DataFrame(columns=['Date', 'Predicted_Close'])
+    historical_df = pd.DataFrame({
+        'Date': prediction_dates,
+        'Predicted_Close': predictions.flatten(),
+        'Actual_Close': y_test_actual.flatten()
+    })
 
-    # Combine historical and future predictions
-    all_predictions = pd.concat([historical_df, future_df], ignore_index=True)
-    
+    future_df = pd.DataFrame({
+        'Date': future_dates,
+        'Predicted_Close': future_predictions.flatten()
+    })
+
+    all_predictions = pd.concat([historical_df, future_df])
+
     return all_predictions, historical_df, future_df, rmse, mape, history
 
 # Model training UI
@@ -352,62 +423,35 @@ if st.session_state.model_trained:
     # Plot training history
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=st.session_state.history.history['loss'], name='Training Loss'))
-    if 'val_loss' in st.session_state.history.history:
-        fig.add_trace(go.Scatter(y=st.session_state.history.history['val_loss'], name='Validation Loss'))
     fig.update_layout(title='Training History', height=400)
     st.plotly_chart(fig, use_container_width=True)
 
     # Forecast plot
     fig = go.Figure()
-    
-    # Plot historical data
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], name='Historical'))
     fig.add_trace(go.Scatter(
-        x=data['Date'], 
-        y=data['Close'], 
-        name='Historical Data',
-        line=dict(color='#2E86C1')
+        x=st.session_state.historical_predictions['Date'],
+        y=st.session_state.historical_predictions['Predicted_Close'],
+        name='Historical Predictions'
     ))
-    
-    # Plot historical predictions
-    if not st.session_state.historical_predictions.empty:
-        fig.add_trace(go.Scatter(
-            x=st.session_state.historical_predictions['Date'],
-            y=st.session_state.historical_predictions['Predicted_Close'],
-            name='Historical Predictions',
-            line=dict(color='#F39C12')
-        ))
-    
-    # Plot future predictions
-    if not st.session_state.future_predictions.empty:
-        fig.add_trace(go.Scatter(
-            x=st.session_state.future_predictions['Date'],
-            y=st.session_state.future_predictions['Predicted_Close'],
-            name='Future Predictions',
-            line=dict(color='#E74C3C')
-        ))
-    
-    fig.update_layout(
-        title=f'{selected_stock} {n_years} Year Forecast',
-        xaxis_title='Date',
-        yaxis_title='Price (USD)',
-        template='plotly_white',
-        height=600
-    )
+    fig.add_trace(go.Scatter(
+        x=st.session_state.future_predictions['Date'],
+        y=st.session_state.future_predictions['Predicted_Close'],
+        name='Future Predictions'
+    ))
+    fig.update_layout(title=f'{n_years} Year Forecast', height=600)
     st.plotly_chart(fig, use_container_width=True)
 
     # Download buttons
     col1, col2 = st.columns(2)
     for col, df, name in [(col1, st.session_state.future_predictions, 'future'),
                          (col2, st.session_state.historical_predictions, 'historical')]:
-        if not df.empty:
-            col.download_button(
-                label=f"Download {name.capitalize()} Predictions",
-                data=df.to_csv(index=False),
-                file_name=f"{selected_stock}_{name}_predictions.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            col.warning(f"No {name} predictions available for download")
+        col.download_button(
+            label=f"Download {name.capitalize()} Predictions",
+            data=df.to_csv(index=False),
+            file_name=f"{selected_stock}_{name}_predictions.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 else:
     st.info('👆 Click "Train LSTM Model" to see predictions.')
