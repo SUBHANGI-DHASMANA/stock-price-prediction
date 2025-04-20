@@ -2,8 +2,6 @@
 
 A Streamlit web application for forecasting stock prices using Long Short-Term Memory (LSTM) neural networks.
 
-![Stock Forecasting App](https://raw.githubusercontent.com/username/stock-price-prediction/main/screenshot.png)
-
 ## Features
 
 - **Real-time Stock Data**: Fetches the latest stock data from Yahoo Finance
